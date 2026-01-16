@@ -180,3 +180,9 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 /.idea
+
+# Large word vector files
+/data/word_vectors/
+/models/word_vectors/
+/text2vec-word2vec-tencent-chinese/
+/light_Tencent_AILab_ChineseEmbedding.bin

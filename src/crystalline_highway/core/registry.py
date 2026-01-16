@@ -26,6 +26,8 @@ class Registry:
             path=config.tencent_vector_path,
             lazy=config.word_vector_lazy,
         )
+        if self.vector_provider.dim != self.config.vector_dim:
+            self.config.vector_dim = self.vector_provider.dim
 
     def ensure_meta(self, text: str, global_freq: float = 1.0) -> MetaEntry:
         """获取或创建元条目。"""
