@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from typing import Dict
 
-from crystalline_highway.models.graph import Graph
-from crystalline_highway.models.instance import InstanceNode
-from crystalline_highway.models.meta import MetaEntry
+from ..models.graph import Graph
+from ..models.instance import InstanceNode
+from ..models.meta import MetaEntry
 
 
 class InMemoryStore:
