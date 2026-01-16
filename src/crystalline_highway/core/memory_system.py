@@ -5,14 +5,16 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, List, Tuple
 
-from crystalline_highway.config import MemoryConfig
-from crystalline_highway.core import vector
-from crystalline_highway.core.recitation import RecitationPlanner
-from crystalline_highway.core.registry import Registry
-from crystalline_highway.models.graph import EdgeType
-from crystalline_highway.models.instance import InstanceNode
-from crystalline_highway.models.session import SessionState
-from crystalline_highway.storage.in_memory import InMemoryStore
+from src.crystalline_highway.config import MemoryConfig
+from src.crystalline_highway.core import vector
+from src.crystalline_highway.core.recitation import RecitationPlanner
+from src.crystalline_highway.core.registry import Registry
+from src.crystalline_highway.core.segmentation import ChineseSegmenter
+from src.crystalline_highway.core.text_utils import normalize_text
+from src.crystalline_highway.models.graph import EdgeType
+from src.crystalline_highway.models.instance import InstanceNode
+from src.crystalline_highway.models.session import SessionState
+from src.crystalline_highway.storage.in_memory import InMemoryStore
 
 
 class MemorySystem:
@@ -22,12 +24,21 @@ class MemorySystem:
         self.config = config or MemoryConfig()
         self.store = InMemoryStore()
         self.registry = Registry(self.store, self.config)
-        self.recitation_planner = RecitationPlanner()
+        # 分词器与背诵计划器是“文本进入系统的入口”，对应指导文件里的
+        # “先拆分、再倒序背诵、直到收敛”的流程。
+        self.segmenter = ChineseSegmenter()
+        self.recitation_planner = RecitationPlanner(self.segmenter)
 
     def _dynamic_radius(self, meta_text: str) -> float:
-        """根据频率计算动态容忍度。"""
+        """根据频率计算动态容忍度。
 
-        meta = self.store.meta_table.get(meta_text)
+        设计依据：
+        - 高频元 → 容忍度极小（去中心化）；
+        - 低频元 → 容忍度极大（稳定锚点）。
+        这正是“寻找驱动建构”的核心直觉之一。
+        """
+
+        meta = self.store.meta_table.get(normalize_text(meta_text))
         if meta is None:
             return self.config.radius_ceiling
         freq = max(meta.private_freq, 0.1)
@@ -43,7 +54,7 @@ class MemorySystem:
     ) -> List[Tuple[InstanceNode, float]]:
         """在半径内寻找匹配实例。"""
 
-        meta = self.store.meta_table.get(meta_text)
+        meta = self.store.meta_table.get(normalize_text(meta_text))
         if meta is None:
             return []
         candidates = []
@@ -65,7 +76,12 @@ class MemorySystem:
     def _create_instance_near(
         self, meta_text: str, center: List[float], radius: float
     ) -> InstanceNode:
-        """未命中时在附近新建实例。"""
+        """未命中时在附近新建实例。
+
+        这里严格遵循“寻找即建构”的规则：
+        - 没命中 → 在当前上下文附近新建；
+        - 新建位置受到范畴向量轻微牵引（但频率越高牵引越弱）。
+        """
 
         meta = self.registry.ensure_meta(meta_text)
         # 高频元的范畴偏移更弱，简单按频率做衰减
@@ -86,8 +102,15 @@ class MemorySystem:
         return chosen
 
     def write_sequence(self, tokens: Iterable[str]) -> List[InstanceNode]:
-        """写入/构筑流程：将输入文本序列化为寻找事件。"""
+        """写入/构筑流程：将输入文本序列化为寻找事件。
 
+        关键点：
+        - 输入是一串“寻找事件”而不是 token 化文本；
+        - 每一步都留下边计数（固化燃料）；
+        - 优先选择更长词条，避免已有词被拆散。
+        """
+
+        tokens = [token for token in tokens if normalize_text(token)]
         tokens = self._prefer_longer_tokens(list(tokens))
         path_nodes: List[InstanceNode] = []
         center = vector.zero_vector(self.config.vector_dim)
@@ -110,10 +133,24 @@ class MemorySystem:
         return self.write_sequence(tokens)
 
     def recite_text(self, text: str) -> None:
-        """背诵调度：按拆分层级倒序输入，直到收敛或达到上限。"""
+        """背诵调度：按拆分层级倒序输入，直到收敛或达到上限。
 
+        新增逻辑：
+        - 先用最小词素完成“实例层面的预注册”（确保实例册有落点）；
+        - 再按短语/短句/长句/段落/全文倒序背诵，逐层收敛后才进入下一轮。
+        """
+
+        self._pre_register_morphemes(text)
         plan = self.recitation_planner.build_plan(text)
         self._recite_until_converged(plan)
+
+    def _pre_register_morphemes(self, text: str) -> None:
+        """用最小词素提前注册元条目与实例落点。"""
+
+        for token in self.segmenter.segment_morphemes(text):
+            if normalize_text(token):
+                # 这里直接触发一次寻找，保证实例册里确实有落点。
+                self._ensure_instance(token, vector.zero_vector(self.config.vector_dim))
 
     def _recite_until_converged(self, plan) -> None:
         """循环背诵直到收敛：对应单元被注册或固化。"""
@@ -122,7 +159,8 @@ class MemorySystem:
         while rounds < self.config.recitation_max_rounds:
             rounds += 1
             for unit in plan:
-                tokens = list(unit.text)
+                # 每个层级单元都必须收敛：也就是它们作为“寻找目标”已被注册到词典中。
+                tokens = self.segmenter.segment_words(unit.normalized_text)
                 self.recite_sequence(tokens)
             if self._check_converged(plan):
                 self._tag_converged(plan)
@@ -131,15 +169,18 @@ class MemorySystem:
 
     def _check_converged(self, plan) -> bool:
         for unit in plan:
-            if unit.text not in self.store.meta_table:
+            if unit.normalized_text not in self.store.meta_table:
                 return False
         return True
 
     def _tag_converged(self, plan) -> None:
         for unit in plan:
-            meta = self.store.meta_table.get(unit.text)
+            meta = self.store.meta_table.get(unit.normalized_text)
             if meta is None:
                 continue
+            # 固化后的展示文本尽量使用带标点的原文本，便于输出阅读。
+            if unit.display_text and len(unit.display_text) > len(meta.text):
+                meta.text = unit.display_text
             meta.labels.add(unit.label)
 
     def _maybe_crystallize(self, left: InstanceNode, right: InstanceNode) -> None:
@@ -148,6 +189,9 @@ class MemorySystem:
         edge = self.store.graph.get_edge(left.node_id, right.node_id)
         if edge is None:
             return
+        # 固化不应期：刚参与固化的实例，下一次固化直接跳过。
+        # 这对应“对一些问题的回答.txt”中的“不应期 flag”规则，
+        # 用于避免 A-B 刚固化又立即参与 A-B-C 的连锁固化。
         if left.stats.refractory > 0 or right.stats.refractory > 0:
             left.stats.refractory = max(0, left.stats.refractory - 1)
             right.stats.refractory = max(0, right.stats.refractory - 1)
@@ -156,10 +200,10 @@ class MemorySystem:
         threshold = self._crystallize_threshold(total_count)
         if edge.walk_count < threshold:
             return
-        # 生成固化元文本，用“+”拼接作为占位
+        # 生成固化元文本：直接拼接，符合“固化时输出可读文本”的要求。
         left_meta = self._meta_text_from_id(left.meta_id)
         right_meta = self._meta_text_from_id(right.meta_id)
-        crystallized_text = f"{left_meta}+{right_meta}"
+        crystallized_text = f"{left_meta}{right_meta}"
         crystallized_meta = self.registry.ensure_meta(crystallized_text)
         self._assign_crystallized_count(crystallized_meta, total_count)
         # 层级标签提升
@@ -168,7 +212,8 @@ class MemorySystem:
             self._meta_level(left.meta_id) + 1,
             self._meta_level(right.meta_id) + 1,
         )
-        # 固化元位置：子元向量平均并向离心方向偏移
+        # 固化元位置：子元向量平均并向离心方向偏移。
+        # 这体现“固化元应更稳定、更稀疏”的设定。
         mean_pos = vector.mean([left.vector_pos, right.vector_pos])
         offset = vector.scale(vector.normalize(mean_pos), self.config.crystallize_offset_scale)
         new_pos = vector.add(mean_pos, offset)
@@ -197,7 +242,8 @@ class MemorySystem:
         session = SessionState(ttl_budget=self.config.retrieval_ttl)
         seed_nodes: List[InstanceNode] = []
         center = vector.zero_vector(self.config.vector_dim)
-        tokens = self._prefer_longer_tokens(list(query_tokens))
+        tokens = [token for token in query_tokens if normalize_text(token)]
+        tokens = self._prefer_longer_tokens(list(tokens))
         for token in tokens:
             node = self._ensure_instance(token, center)
             seed_nodes.append(node)
@@ -275,7 +321,7 @@ class MemorySystem:
         while index < len(tokens):
             if index + 1 < len(tokens):
                 candidate = f"{tokens[index]}{tokens[index + 1]}"
-                if candidate in self.store.meta_table:
+                if normalize_text(candidate) in self.store.meta_table:
                     merged.append(candidate)
                     index += 2
                     continue
@@ -288,6 +334,8 @@ class MemorySystem:
 
         if total_count <= 1:
             return self.config.crystallize_threshold
+        # 指导文件要求：阈值 = ceil(log2(固化元数量)) + 1。
+        # 这能保证固化层级递增（2 → 3 → 4 ...）并避免过快固化。
         return math.ceil(math.log2(total_count)) + 1
 
     def _crystallized_radius_multiplier(self, total_count: int) -> float:
@@ -329,7 +377,19 @@ class MemorySystem:
         return meta.level
 
     def _meta_labels(self, text: str) -> List[str]:
-        meta = self.store.meta_table.get(text)
+        meta = self.store.meta_table.get(normalize_text(text))
         if meta is None:
             return []
         return list(meta.labels)
+
+    def write_text(self, text: str) -> List[InstanceNode]:
+        """直接写入原始文本：先切分成短语级词条再写入。"""
+
+        tokens = self.segmenter.segment_words(text)
+        return self.write_sequence(tokens)
+
+    def retrieve_text(self, text: str) -> Dict[str, List[str]]:
+        """直接检索原始文本：先切分成短语级词条作为起点。"""
+
+        tokens = self.segmenter.segment_words(text)
+        return self.retrieve(tokens)

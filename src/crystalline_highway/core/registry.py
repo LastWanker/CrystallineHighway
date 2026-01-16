@@ -7,6 +7,7 @@ from typing import List
 
 from src.crystalline_highway.config import MemoryConfig
 from src.crystalline_highway.core import vector
+from src.crystalline_highway.core.text_utils import normalize_text
 from src.crystalline_highway.core.word_vectors import WordVectorProvider
 from src.crystalline_highway.models.instance import InstanceNode
 from src.crystalline_highway.models.meta import MetaEntry
@@ -21,30 +22,51 @@ class Registry:
         self.config = config
         self._meta_counter = itertools.count(1)
         self._node_counter = itertools.count(1)
+        # 词向量用于“范畴场/星图”，这里对接外部词向量库（腾讯中文词向量）。
+        # 这符合“寻找驱动建构”里“先有粗糙范畴力场”的设定。
         self.vector_provider = WordVectorProvider(
             dim=config.vector_dim,
             path=config.tencent_vector_path,
             lazy=config.word_vector_lazy,
+            index_path=config.tencent_vector_index_path,
+            auto_build_index=config.word_vector_auto_index,
         )
         if self.vector_provider.dim != self.config.vector_dim:
             self.config.vector_dim = self.vector_provider.dim
 
-    def ensure_meta(self, text: str, global_freq: float = 1.0) -> MetaEntry:
-        """获取或创建元条目。"""
+    def ensure_meta(
+        self,
+        text: str,
+        global_freq: float = 1.0,
+        normalized_text: str | None = None,
+    ) -> MetaEntry:
+        """获取或创建元条目。
 
-        if text in self.store.meta_table:
-            meta = self.store.meta_table[text]
+        关键逻辑说明：
+        - 元是“寻找的目标”，其身份不是数据库 ID，而是“规范化后的文本”。
+        - 寻找时忽略标点，因此词典键使用 normalized_text；
+        - 固化时保留标点，因此显示文本仍用原 text。
+        """
+
+        normalized_key = normalized_text or normalize_text(text)
+        if normalized_key in self.store.meta_table:
+            meta = self.store.meta_table[normalized_key]
             meta.private_freq += 1.0
+            # 如果新的显示文本更完整（例如包含标点），则更新展示文本，
+            # 以满足“固化时保留标点”的可读性需求。
+            if text and len(text) >= len(meta.text):
+                meta.text = text
             return meta
         meta_id = f"meta-{next(self._meta_counter)}"
         entry = MetaEntry(
             meta_id=meta_id,
             text=text,
+            normalized_text=normalized_key,
             global_freq=global_freq,
             private_freq=1.0,
             category_vector=self.vector_provider.get_vector(text),
         )
-        self.store.meta_table[text] = entry
+        self.store.meta_table[normalized_key] = entry
         return entry
 
     def create_instance(

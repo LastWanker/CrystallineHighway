@@ -13,6 +13,8 @@ class MetaEntry:
 
     meta_id: str
     text: str
+    # 规范化文本（去标点），用于字典键与“寻找时忽略标点”的规则
+    normalized_text: str
     global_freq: float
     private_freq: float
     level: int = 0

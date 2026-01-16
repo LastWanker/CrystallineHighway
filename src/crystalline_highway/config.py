@@ -1,6 +1,7 @@
 """全局配置与默认参数。"""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 
 @dataclass
@@ -28,10 +29,21 @@ class MemoryConfig:
     crystallize_radius_multiplier: float = 2.0
     # 固化元向更离心位置偏移的幅度
     crystallize_offset_scale: float = 0.2
-    # 外部词向量文件路径（例如腾讯中文词向量 200 维）
-    tencent_vector_path: str | None = None
+    # 外部词向量文件路径（默认腾讯中文词向量 200 维）
+    tencent_vector_path: str | None = field(
+        default_factory=lambda: str(
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "word_vectors"
+            / "light_Tencent_AILab_ChineseEmbedding.bin"
+        )
+    )
+    # 词向量索引路径（gensim KeyedVectors，建议与 .bin 同级）
+    tencent_vector_index_path: str | None = None
     # 词向量是否使用懒加载扫描（大型文件建议先做索引）
     word_vector_lazy: bool = True
+    # 是否自动构建 .kv 索引（第一次加载会较慢）
+    word_vector_auto_index: bool = True
     # 背诵循环的最大轮次，避免无限循环
     recitation_max_rounds: int = 5
     # 检索输出配额：短句、长句、段落、相关记忆、可能相关记忆
