@@ -1,0 +1,335 @@
+"""记忆系统核心流程实现。"""
+
+from __future__ import annotations
+
+import math
+from typing import Dict, Iterable, List, Tuple
+
+from crystalline_highway.config import MemoryConfig
+from crystalline_highway.core import vector
+from crystalline_highway.core.recitation import RecitationPlanner
+from crystalline_highway.core.registry import Registry
+from crystalline_highway.models.graph import EdgeType
+from crystalline_highway.models.instance import InstanceNode
+from crystalline_highway.models.session import SessionState
+from crystalline_highway.storage.in_memory import InMemoryStore
+
+
+class MemorySystem:
+    """寻找驱动建构的记忆系统原型。"""
+
+    def __init__(self, config: MemoryConfig | None = None) -> None:
+        self.config = config or MemoryConfig()
+        self.store = InMemoryStore()
+        self.registry = Registry(self.store, self.config)
+        self.recitation_planner = RecitationPlanner()
+
+    def _dynamic_radius(self, meta_text: str) -> float:
+        """根据频率计算动态容忍度。"""
+
+        meta = self.store.meta_table.get(meta_text)
+        if meta is None:
+            return self.config.radius_ceiling
+        freq = max(meta.private_freq, 0.1)
+        radius = self.config.radius_base / freq
+        # 固化元的容忍度更大，但用对数缓和扩张速度
+        if meta.level > 0:
+            count = max(meta.crystallized_count, 1)
+            radius *= self._crystallized_radius_multiplier(count)
+        return min(max(radius, self.config.radius_floor), self.config.radius_ceiling)
+
+    def _find_candidates(
+        self, meta_text: str, center: List[float], radius: float
+    ) -> List[Tuple[InstanceNode, float]]:
+        """在半径内寻找匹配实例。"""
+
+        meta = self.store.meta_table.get(meta_text)
+        if meta is None:
+            return []
+        candidates = []
+        for node_id in meta.instances:
+            node = self.store.instance_table[node_id]
+            dist = vector.distance(center, node.vector_pos)
+            if dist <= radius:
+                candidates.append((node, dist))
+        return candidates
+
+    def _select_best(self, candidates: List[Tuple[InstanceNode, float]]) -> InstanceNode | None:
+        """择优规则：先近，再常走。"""
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[1], -item[0].stats.use_count))
+        return candidates[0][0]
+
+    def _create_instance_near(
+        self, meta_text: str, center: List[float], radius: float
+    ) -> InstanceNode:
+        """未命中时在附近新建实例。"""
+
+        meta = self.registry.ensure_meta(meta_text)
+        # 高频元的范畴偏移更弱，简单按频率做衰减
+        freq = max(meta.private_freq, 1.0)
+        bias = vector.scale(meta.category_vector, 1.0 / freq)
+        jitter_scale = min(radius, self.config.jitter_scale)
+        return self.registry.create_instance(meta, center, bias, jitter_scale)
+
+    def _ensure_instance(self, meta_text: str, center: List[float]) -> InstanceNode:
+        """确保某元在当前位置附近有实例可用。"""
+
+        radius = self._dynamic_radius(meta_text)
+        candidates = self._find_candidates(meta_text, center, radius)
+        chosen = self._select_best(candidates)
+        if chosen is None:
+            chosen = self._create_instance_near(meta_text, center, radius)
+        chosen.stats.use_count += 1
+        return chosen
+
+    def write_sequence(self, tokens: Iterable[str]) -> List[InstanceNode]:
+        """写入/构筑流程：将输入文本序列化为寻找事件。"""
+
+        tokens = self._prefer_longer_tokens(list(tokens))
+        path_nodes: List[InstanceNode] = []
+        center = vector.zero_vector(self.config.vector_dim)
+        prev_node: InstanceNode | None = None
+        for token in tokens:
+            node = self._ensure_instance(token, center)
+            if prev_node is not None:
+                self.store.graph.add_edge(prev_node.node_id, node.node_id, EdgeType.horizontal)
+                prev_node.stats.pass_count += 1
+                node.stats.pass_count += 1
+                self._maybe_crystallize(prev_node, node)
+            path_nodes.append(node)
+            prev_node = node
+            center = node.vector_pos
+        return path_nodes
+
+    def recite_sequence(self, tokens: Iterable[str]) -> List[InstanceNode]:
+        """背诵流程：反复走同一路径，强化固化。"""
+
+        return self.write_sequence(tokens)
+
+    def recite_text(self, text: str) -> None:
+        """背诵调度：按拆分层级倒序输入，直到收敛或达到上限。"""
+
+        plan = self.recitation_planner.build_plan(text)
+        self._recite_until_converged(plan)
+
+    def _recite_until_converged(self, plan) -> None:
+        """循环背诵直到收敛：对应单元被注册或固化。"""
+
+        rounds = 0
+        while rounds < self.config.recitation_max_rounds:
+            rounds += 1
+            for unit in plan:
+                tokens = list(unit.text)
+                self.recite_sequence(tokens)
+            if self._check_converged(plan):
+                self._tag_converged(plan)
+                return
+        self._tag_converged(plan)
+
+    def _check_converged(self, plan) -> bool:
+        for unit in plan:
+            if unit.text not in self.store.meta_table:
+                return False
+        return True
+
+    def _tag_converged(self, plan) -> None:
+        for unit in plan:
+            meta = self.store.meta_table.get(unit.text)
+            if meta is None:
+                continue
+            meta.labels.add(unit.label)
+
+    def _maybe_crystallize(self, left: InstanceNode, right: InstanceNode) -> None:
+        """检测两元路径是否达到固化阈值。"""
+
+        edge = self.store.graph.get_edge(left.node_id, right.node_id)
+        if edge is None:
+            return
+        if left.stats.refractory > 0 or right.stats.refractory > 0:
+            left.stats.refractory = max(0, left.stats.refractory - 1)
+            right.stats.refractory = max(0, right.stats.refractory - 1)
+            return
+        total_count = self._crystallized_count(left) + self._crystallized_count(right)
+        threshold = self._crystallize_threshold(total_count)
+        if edge.walk_count < threshold:
+            return
+        # 生成固化元文本，用“+”拼接作为占位
+        left_meta = self._meta_text_from_id(left.meta_id)
+        right_meta = self._meta_text_from_id(right.meta_id)
+        crystallized_text = f"{left_meta}+{right_meta}"
+        crystallized_meta = self.registry.ensure_meta(crystallized_text)
+        self._assign_crystallized_count(crystallized_meta, total_count)
+        # 层级标签提升
+        crystallized_meta.level = max(
+            crystallized_meta.level,
+            self._meta_level(left.meta_id) + 1,
+            self._meta_level(right.meta_id) + 1,
+        )
+        # 固化元位置：子元向量平均并向离心方向偏移
+        mean_pos = vector.mean([left.vector_pos, right.vector_pos])
+        offset = vector.scale(vector.normalize(mean_pos), self.config.crystallize_offset_scale)
+        new_pos = vector.add(mean_pos, offset)
+        new_node = self.registry.create_instance(
+            crystallized_meta,
+            new_pos,
+            bias_vector=vector.zero_vector(self.config.vector_dim),
+            jitter_scale=0.0,
+        )
+        new_node.payload["source"] = crystallized_text
+        new_node.payload["crystallized_count"] = str(total_count)
+        # 固化元容忍度极高、触发频率极低：在这里体现为高层级标签
+        # 旧路计数抽走迁移
+        decrement = max(1, threshold // 2)
+        self.store.graph.downgrade_edge(left.node_id, right.node_id, decrement)
+        self.store.graph.reset_edge(left.node_id, right.node_id, 1)
+        # 建立纵向路径（索引路）
+        self.store.graph.add_edge(left.node_id, new_node.node_id, EdgeType.vertical)
+        self.store.graph.add_edge(right.node_id, new_node.node_id, EdgeType.vertical)
+        left.stats.refractory = 1
+        right.stats.refractory = 1
+
+    def retrieve(self, query_tokens: Iterable[str]) -> Dict[str, List[str]]:
+        """检索/回忆流程，返回候选节点及其来源。"""
+
+        session = SessionState(ttl_budget=self.config.retrieval_ttl)
+        seed_nodes: List[InstanceNode] = []
+        center = vector.zero_vector(self.config.vector_dim)
+        tokens = self._prefer_longer_tokens(list(query_tokens))
+        for token in tokens:
+            node = self._ensure_instance(token, center)
+            seed_nodes.append(node)
+        # 多源扩散
+        frontier = [(node.node_id, session.ttl_budget) for node in seed_nodes]
+        for node in seed_nodes:
+            session.touch(node.node_id, source=node.node_id)
+        while frontier:
+            current_id, ttl = frontier.pop(0)
+            if ttl <= 0:
+                continue
+            current_node = self.store.instance_table[current_id]
+            neighbors = self.store.graph.neighbors(current_id)
+            for neighbor_id in neighbors:
+                neighbor_node = self.store.instance_table[neighbor_id]
+                penalty = min(neighbor_node.hub_penalty, self.config.hub_penalty_cap)
+                next_ttl = ttl - 1 - penalty
+                if next_ttl < 0:
+                    continue
+                session.touch(neighbor_id, source=current_id)
+                frontier.append((neighbor_id, next_ttl))
+        ranked = sorted(session.light_count.items(), key=lambda item: -item[1])
+        return self._collect_retrieval_results(ranked, session)
+
+    def _collect_retrieval_results(
+        self,
+        ranked: List[Tuple[str, int]],
+        session: SessionState,
+    ) -> Dict[str, List[str]]:
+        """按配额输出短句/长句/段落/记忆结果。"""
+
+        results: Dict[str, List[str]] = {}
+        selected: set[str] = set()
+
+        def add_by_label(label: str, quota: int) -> None:
+            for node_id, _count in ranked:
+                if node_id in selected:
+                    continue
+                node = self.store.instance_table[node_id]
+                meta = self._meta_from_id(node.meta_id)
+                if meta is None or label not in meta.labels:
+                    continue
+                results[meta.text] = session.hit_sources.get(node_id, [])
+                selected.add(node_id)
+                if len([k for k in results if label in self._meta_labels(k)]) >= quota:
+                    break
+
+        add_by_label("short_sentence", self.config.retrieval_quota_short)
+        add_by_label("long_sentence", self.config.retrieval_quota_long)
+        add_by_label("paragraph", self.config.retrieval_quota_paragraph)
+        add_by_label("full_text", self.config.retrieval_quota_memory)
+
+        possible_quota = self.config.retrieval_quota_possible
+        for node_id, _count in ranked:
+            if node_id in selected:
+                continue
+            node = self.store.instance_table[node_id]
+            meta = self._meta_from_id(node.meta_id)
+            if meta is None:
+                continue
+            results[meta.text] = session.hit_sources.get(node_id, [])
+            selected.add(node_id)
+            possible_quota -= 1
+            if possible_quota <= 0:
+                break
+        return results
+
+    def _prefer_longer_tokens(self, tokens: List[str]) -> List[str]:
+        """优先选择更长的词条（例如字典中已有 CD 时选 CD）。"""
+
+        if not tokens:
+            return []
+        merged: List[str] = []
+        index = 0
+        while index < len(tokens):
+            if index + 1 < len(tokens):
+                candidate = f"{tokens[index]}{tokens[index + 1]}"
+                if candidate in self.store.meta_table:
+                    merged.append(candidate)
+                    index += 2
+                    continue
+            merged.append(tokens[index])
+            index += 1
+        return merged
+
+    def _crystallize_threshold(self, total_count: int) -> int:
+        """根据固化元数量标签计算阈值。"""
+
+        if total_count <= 1:
+            return self.config.crystallize_threshold
+        return math.ceil(math.log2(total_count)) + 1
+
+    def _crystallized_radius_multiplier(self, total_count: int) -> float:
+        """固化元容忍度倍率（对数缓和）。"""
+
+        return self.config.crystallize_radius_multiplier * (math.log2(total_count + 1) + 1.0)
+
+    def _crystallized_count(self, node: InstanceNode) -> int:
+        meta = self._meta_from_id(node.meta_id)
+        if meta is None:
+            return 1
+        if "crystallized_count" in node.payload:
+            try:
+                return int(node.payload["crystallized_count"])
+            except ValueError:
+                return meta.crystallized_count
+        return meta.crystallized_count
+
+    def _assign_crystallized_count(self, meta, total_count: int) -> None:
+        if meta.crystallized_count == 1:
+            meta.crystallized_count = total_count
+
+    def _meta_text_from_id(self, meta_id: str) -> str:
+        meta = self._meta_from_id(meta_id)
+        if meta is None:
+            return meta_id
+        return meta.text
+
+    def _meta_from_id(self, meta_id: str):
+        for meta in self.store.meta_table.values():
+            if meta.meta_id == meta_id:
+                return meta
+        return None
+
+    def _meta_level(self, meta_id: str) -> int:
+        meta = self._meta_from_id(meta_id)
+        if meta is None:
+            return 0
+        return meta.level
+
+    def _meta_labels(self, text: str) -> List[str]:
+        meta = self.store.meta_table.get(text)
+        if meta is None:
+            return []
+        return list(meta.labels)
