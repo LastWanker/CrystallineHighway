@@ -7,7 +7,7 @@ import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-from src.crystalline_highway.core.segmentation import ChineseSegmenter
+from .segmentation import ChineseSegmenter
 
 
 class WordVectorProvider:

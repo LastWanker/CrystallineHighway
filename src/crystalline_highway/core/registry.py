@@ -5,13 +5,13 @@ from __future__ import annotations
 import itertools
 from typing import List
 
-from src.crystalline_highway.config import MemoryConfig
-from src.crystalline_highway.core import vector
-from src.crystalline_highway.core.text_utils import normalize_text
-from src.crystalline_highway.core.word_vectors import WordVectorProvider
-from src.crystalline_highway.models.instance import InstanceNode
-from src.crystalline_highway.models.meta import MetaEntry
-from src.crystalline_highway.storage.in_memory import InMemoryStore
+from ..config import MemoryConfig
+from . import vector
+from .text_utils import normalize_text
+from .word_vectors import WordVectorProvider
+from ..models.instance import InstanceNode
+from ..models.meta import MetaEntry
+from ..storage.in_memory import InMemoryStore
 
 
 class Registry:

@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import List
 
-from src.crystalline_highway.core.segmentation import ChineseSegmenter
-from src.crystalline_highway.core.text_utils import normalize_text
+from .segmentation import ChineseSegmenter
+from .text_utils import normalize_text
 
 
 @dataclass

@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Iterable, List
 
-from src.crystalline_highway.core.text_utils import normalize_text
+from .text_utils import normalize_text
 
 
 def _split_with_delimiters(text: str, pattern: re.Pattern[str]) -> List[str]:
@@ -61,7 +61,7 @@ class ChineseSegmenter:
         if self.backend == "ltp":
             tokens = self._ltp_segment(text)
             return [token for token in tokens if normalize_text(token)]
-        return self._simple_char_segment(text)
+        return self._simple_morpheme_segment(text)
 
     def segment_words(self, text: str) -> List[str]:
         """常规词语切分，用于短语级背诵。"""
@@ -140,6 +140,44 @@ class ChineseSegmenter:
 
     def _simple_char_segment(self, text: str) -> List[str]:
         return [char for char in text if normalize_text(char)]
+
+    def _simple_morpheme_segment(self, text: str) -> List[str]:
+        tokens: List[str] = []
+        chinese_buffer = ""
+        alnum_buffer = ""
+        for char in text:
+            if "\u4e00" <= char <= "\u9fff":
+                if alnum_buffer:
+                    tokens.append(alnum_buffer)
+                    alnum_buffer = ""
+                chinese_buffer += char
+                continue
+            if char.isalnum():
+                if chinese_buffer:
+                    tokens.extend(self._split_chinese_morphemes(chinese_buffer))
+                    chinese_buffer = ""
+                alnum_buffer += char
+                continue
+            if chinese_buffer:
+                tokens.extend(self._split_chinese_morphemes(chinese_buffer))
+                chinese_buffer = ""
+            if alnum_buffer:
+                tokens.append(alnum_buffer)
+                alnum_buffer = ""
+        if chinese_buffer:
+            tokens.extend(self._split_chinese_morphemes(chinese_buffer))
+        if alnum_buffer:
+            tokens.append(alnum_buffer)
+        return [token for token in tokens if normalize_text(token)]
+
+    def _split_chinese_morphemes(self, text: str) -> List[str]:
+        if len(text) <= 1:
+            return [text] if text else []
+        chunks = [text[index : index + 2] for index in range(0, len(text), 2)]
+        if len(chunks) >= 2 and len(chunks[-1]) == 1:
+            chunks[-2] += chunks[-1]
+            chunks.pop()
+        return chunks
 
     def _detect_backend(self) -> str:
         if importlib.util.find_spec("jieba") is not None:

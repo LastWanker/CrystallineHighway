@@ -1,8 +1,14 @@
 import importlib.util
 import math
+import sys
 from pathlib import Path
 
-from src.crystalline_highway.core.word_vectors import WordVectorProvider
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = PROJECT_ROOT / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
+from crystalline_highway.core.word_vectors import WordVectorProvider
 
 
 def _assert_vector_close(actual, expected, tol=1e-6):
@@ -16,11 +22,13 @@ def test_text_vectors_mean(tmp_path: Path):
     text_path.write_text("2 3\n你好 0.1 0.2 0.3\n世界 0.4 0.5 0.6\n", encoding="utf-8")
     provider = WordVectorProvider(dim=3, path=str(text_path), lazy=True)
     vec = provider.get_tokens_vector(["你好", "世界"])
+    print("text_vectors_mean:", vec)
     _assert_vector_close(vec, [0.25, 0.35, 0.45])
 
 
 def test_binary_index_build(tmp_path: Path):
     if importlib.util.find_spec("gensim") is None:
+        print("gensim not available; skipping binary index build test")
         return
     from gensim.models import KeyedVectors
 
@@ -36,5 +44,6 @@ def test_binary_index_build(tmp_path: Path):
         index_path=str(index_path),
         auto_build_index=True,
     )
+    print("binary_index_build vector:", provider.get_vector("你好"))
     _assert_vector_close(provider.get_vector("你好"), [0.1, 0.2])
     assert index_path.exists()

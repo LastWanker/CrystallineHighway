@@ -5,16 +5,16 @@ from __future__ import annotations
 import math
 from typing import Dict, Iterable, List, Tuple
 
-from src.crystalline_highway.config import MemoryConfig
-from src.crystalline_highway.core import vector
-from src.crystalline_highway.core.recitation import RecitationPlanner
-from src.crystalline_highway.core.registry import Registry
-from src.crystalline_highway.core.segmentation import ChineseSegmenter
-from src.crystalline_highway.core.text_utils import normalize_text
-from src.crystalline_highway.models.graph import EdgeType
-from src.crystalline_highway.models.instance import InstanceNode
-from src.crystalline_highway.models.session import SessionState
-from src.crystalline_highway.storage.in_memory import InMemoryStore
+from ..config import MemoryConfig
+from . import vector
+from .recitation import RecitationPlanner
+from .registry import Registry
+from .segmentation import ChineseSegmenter
+from .text_utils import normalize_text
+from ..models.graph import EdgeType
+from ..models.instance import InstanceNode
+from ..models.session import SessionState
+from ..storage.in_memory import InMemoryStore
 
 
 class MemorySystem:
