@@ -9,7 +9,7 @@ from src.crystalline_highway.core.memory_system import MemorySystem
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="关键词查询")
-    parser.add_argument("keywords", nargs="*", help="关键词（可空格分隔）")
+    parser.add_argument("keywords", nargs="*", help="赵小姐 巧克力")
     args = parser.parse_args()
 
     if args.keywords:

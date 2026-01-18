@@ -6,7 +6,7 @@ from src.crystalline_highway.core.memory_system import MemorySystem
 
 # TODO: 把你要背诵的文本粘贴到这里。
 TEXT_TO_RECITE = """
-在这里粘贴你要背诵的内容。
+和赵小姐清晨爬紫金山，雾气缠着松林，她递来温水和巧克力，山顶风大，我心却发热。
 """.strip()
 
 

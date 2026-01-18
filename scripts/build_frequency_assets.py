@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
-
 from src.crystalline_highway.config import MemoryConfig
 from src.crystalline_highway.core.registry import Registry
 from src.crystalline_highway.frequency.calibration import (
@@ -24,7 +22,7 @@ def main() -> None:
     )
     registry = Registry(InMemoryStore(), config, frequency_provider)
 
-    has_wordfreq = importlib.util.find_spec("wordfreq") is not None
+    has_wordfreq = frequency_provider.available
     vector_path = registry.vector_provider.path
     has_vectors = vector_path is not None and vector_path.exists()
 
@@ -43,7 +41,7 @@ def main() -> None:
     print(f"频率文件已生成：{config.frequency_calibration_path}")
     print(f"使用模式：{mode}")
     if not has_wordfreq:
-        print("提示：未检测到 wordfreq，将使用兜底频率。")
+        print("提示：未检测到 wordfreq 或 jieba，将使用兜底频率。")
     if not has_vectors:
         print("提示：未检测到词向量文件，将使用兜底距离尺度。")
 

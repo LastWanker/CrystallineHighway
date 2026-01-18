@@ -20,12 +20,19 @@ class GlobalFrequencyProvider:
         self.language = language
         self.sample_size = sample_size
         self.fallback_frequency = fallback_frequency
-        self._available = importlib.util.find_spec("wordfreq") is not None
+        has_wordfreq = importlib.util.find_spec("wordfreq") is not None
+        needs_jieba = self.language.lower().startswith("zh")
+        has_jieba = importlib.util.find_spec("jieba") is not None
+        self._available = has_wordfreq and (not needs_jieba or has_jieba)
+
+    @property
+    def available(self) -> bool:
+        return self._available
 
     def word_frequency(self, word: str) -> float:
         if not self._available:
             warnings.warn(
-                "缺少 wordfreq，使用兜底频率值。",
+                "缺少 wordfreq 或 jieba，使用兜底频率值。",
                 RuntimeWarning,
             )
             return self.fallback_frequency
