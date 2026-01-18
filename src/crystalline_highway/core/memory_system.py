@@ -145,7 +145,17 @@ class MemorySystem:
             self.config.frequency_eps,
         )
         bias = vector.scale(meta.category_vector, 1.0 / max(effective_freq, 1.0))
-        jitter_scale = min(radius, self.config.jitter_scale)
+        max_offset = radius * 0.5
+        if max_offset <= 0:
+            bias = vector.zero_vector(self.config.vector_dim)
+        else:
+            bias_norm = vector.distance(bias, vector.zero_vector(self.config.vector_dim))
+            if bias_norm > max_offset:
+                bias = vector.scale(bias, max_offset / bias_norm)
+        jitter_scale = min(radius * 0.5, self.config.jitter_scale)
+        print(
+            f"创建实例: {meta_text}，中心偏移上限{max_offset:.4f}，随机扰动{jitter_scale:.4f}"
+        )
         return self.registry.create_instance(meta, center, bias, jitter_scale)
 
     def _ensure_instance(self, meta_text: str, center: List[float]) -> InstanceNode:
@@ -203,8 +213,9 @@ class MemorySystem:
         - 再按短语/短句/长句/段落/全文倒序背诵，逐层收敛后才进入下一轮。
         """
 
-        self._pre_register_morphemes(text)
         plan = self.recitation_planner.build_plan(text)
+        self._register_plan(plan)
+        self._pre_register_morphemes(text)
         self._recite_until_converged(plan)
 
     def _pre_register_morphemes(self, text: str) -> None:
@@ -221,11 +232,14 @@ class MemorySystem:
         rounds = 0
         while rounds < self.config.recitation_max_rounds:
             rounds += 1
+            print(f"进入背诵轮次 {rounds}")
             for unit in plan:
-                self._register_unit(unit)
-                # 每个层级单元都必须收敛：也就是它们作为“寻找目标”已被注册到词典中。
-                tokens = self.segmenter.segment_morphemes(unit.display_text)
-                self.recite_sequence(tokens)
+                if unit.label == "morpheme":
+                    continue
+                tokens = self._tokens_for_unit(unit)
+                if not tokens:
+                    continue
+                self._ensure_unit_instance(unit, tokens)
             if self._check_converged(plan):
                 self._tag_converged(plan)
                 return
@@ -234,7 +248,10 @@ class MemorySystem:
 
     def _check_converged(self, plan) -> bool:
         for unit in plan:
-            if unit.normalized_text not in self.store.meta_table:
+            if not unit.normalized_text:
+                continue
+            meta = self.store.meta_table.get(unit.normalized_text)
+            if meta is None or not meta.instances:
                 return False
         return True
 
@@ -257,9 +274,10 @@ class MemorySystem:
                 normalized_text=unit.normalized_text,
             )
         else:
-            meta = self.store.meta_table.get(unit.normalized_text)
-            if meta is None:
-                return
+            meta = self.registry.ensure_meta(
+                unit.display_text,
+                normalized_text=unit.normalized_text,
+            )
         if not meta.instances:
             radius = self._dynamic_radius(unit.display_text)
             self._create_instance_near(
@@ -274,19 +292,66 @@ class MemorySystem:
         for unit in plan:
             if not unit.normalized_text:
                 continue
-            if unit.normalized_text in self.store.meta_table:
+            meta = self.store.meta_table.get(unit.normalized_text)
+            if meta is None:
+                meta = self.registry.ensure_meta(
+                    unit.display_text,
+                    normalized_text=unit.normalized_text,
+                )
+            if meta.instances:
                 continue
+            radius = self._dynamic_radius(unit.display_text)
+            print(f"兜底注册实例: {unit.display_text}")
+            self._create_instance_near(
+                unit.display_text,
+                vector.zero_vector(self.config.vector_dim),
+                radius,
+            )
+
+    def _register_plan(self, plan) -> None:
+        """先注册词典，再进入背诵回圈。"""
+
+        for unit in plan:
+            if not unit.normalized_text:
+                continue
+            meta = self.store.meta_table.get(unit.normalized_text)
+            if meta is None:
+                self.registry.ensure_meta(
+                    unit.display_text,
+                    normalized_text=unit.normalized_text,
+                )
+                print(f"注册词典: {unit.display_text}")
+
+    def _tokens_for_unit(self, unit) -> List[str]:
+        if unit.label == "morpheme":
+            return [unit.display_text]
+        return self.segmenter.segment_words(unit.display_text)
+
+    def _ensure_unit_instance(self, unit, tokens: List[str]) -> None:
+        meta = self.store.meta_table.get(unit.normalized_text)
+        if meta is None:
             meta = self.registry.ensure_meta(
                 unit.display_text,
                 normalized_text=unit.normalized_text,
             )
-            if not meta.instances:
-                radius = self._dynamic_radius(unit.display_text)
-                self._create_instance_near(
-                    unit.display_text,
-                    vector.zero_vector(self.config.vector_dim),
-                    radius,
-                )
+            print(f"补注册词典: {unit.display_text}")
+        if meta.instances:
+            self.recite_sequence(tokens)
+            return
+        for attempt in range(1, self.config.recitation_unit_max_attempts + 1):
+            print(f"背诵尝试 {attempt}: {unit.display_text}")
+            self.recite_sequence(tokens)
+            meta = self.store.meta_table.get(unit.normalized_text)
+            if meta and meta.instances:
+                print(f"背诵收敛: {unit.display_text}")
+                return
+        radius = self._dynamic_radius(unit.display_text)
+        print(f"背诵未收敛，兜底创建实例: {unit.display_text}")
+        self._create_instance_near(
+            unit.display_text,
+            vector.zero_vector(self.config.vector_dim),
+            radius,
+        )
 
     def _private_typical_frequency(self) -> float:
         return private_typical(
@@ -356,15 +421,16 @@ class MemorySystem:
         seed_nodes = self._resolve_query_seed_nodes(tokens)
         if not seed_nodes:
             return {}
+        print(f"检索起点数量: {len(seed_nodes)}，TTL={session.ttl_budget}")
         # 多源扩散
         frontier = [(node.node_id, session.ttl_budget) for node in seed_nodes]
+        best_ttl: Dict[str, float] = {node.node_id: session.ttl_budget for node in seed_nodes}
         for node in seed_nodes:
             session.touch(node.node_id, source=node.node_id)
         while frontier:
             current_id, ttl = frontier.pop(0)
             if ttl <= 0:
                 continue
-            current_node = self.store.instance_table[current_id]
             neighbors = self.store.graph.neighbors(current_id, include_reverse_horizontal=True)
             for neighbor_id in neighbors:
                 neighbor_node = self.store.instance_table[neighbor_id]
@@ -372,6 +438,9 @@ class MemorySystem:
                 next_ttl = ttl - 1 - penalty
                 if next_ttl < 0:
                     continue
+                if next_ttl <= best_ttl.get(neighbor_id, -1):
+                    continue
+                best_ttl[neighbor_id] = next_ttl
                 session.touch(neighbor_id, source=current_id)
                 frontier.append((neighbor_id, next_ttl))
         ranked = sorted(session.light_count.items(), key=lambda item: -item[1])

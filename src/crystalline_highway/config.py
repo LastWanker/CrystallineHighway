@@ -15,7 +15,7 @@ class MemoryConfig:
     vector_dim: int = 200
     # 频率与半径的基本常量，用于将频率映射成容忍度
     radius_base: float = 1.0
-    radius_floor: float = 0.0
+    radius_floor: float = 0.5
     radius_ceiling: float = 100.0
     # 频率映射命中概率（典型词命中率）
     frequency_hit_probability: float = 0.5
@@ -73,6 +73,8 @@ class MemoryConfig:
     word_vector_auto_index: bool = True
     # 背诵循环的最大轮次，避免无限循环
     recitation_max_rounds: int = 5
+    # 单个单元的背诵尝试上限（未收敛则兜底创建实例）
+    recitation_unit_max_attempts: int = 3
     # 检索输出配额：短句、长句、段落、相关记忆、可能相关记忆
     retrieval_quota_short: int = 9
     retrieval_quota_long: int = 6
