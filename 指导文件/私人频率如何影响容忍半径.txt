@@ -1,0 +1,38 @@
+【算法：global_freq × private_boost → effective_freq → radius】
+
+目标：
+- global_freq 决定“语言共同常识”的基础半径
+- private_freq 只负责“把你个人常用的词变得更挑剔”（半径更小）
+- 私人提升要“递减收益”（否则口头禅会把半径压到接近 0，系统发疯分身）
+
+需要维护的量：
+- global_freq[w]：全局频率（冷启动）
+- private_count[w]：你自己的计数（每次使用/写入 +1）
+- private_typical：私人计数的典型尺度（推荐：所有 private_count 的中位数；没有就用常数 10）
+
+超少参数（推荐默认值）：
+- beta = 0.5        # 私人频率的影响强度，越大越狠
+- cap  = 5       # 私人加成上限，防止极端口头禅把半径压死
+- eps  = 1e-12      # 防止除零
+
+步骤 A：把 private_count 变成一个“乘积加成” private_boost（递减收益）
+    ratio = private_count[w] / max(private_typical, 1)
+    private_boost = (1 + ratio) ** beta
+    private_boost = min(private_boost, cap)
+
+直觉：
+- 你比典型用得多 → boost > 1 → 有效频率变大 → 半径变小
+- 用得少 → boost 接近 1 → 几乎不影响全局
+- (1+ratio)^beta 让增长越来越慢（递减收益），更稳
+
+步骤 B：合成有效频率 effective_freq
+    effective_freq = max(global_freq[w], eps) * private_boost
+
+步骤 C：照你之前的“频率倒数半径”算容忍度（再裁剪）
+    R = R_typical * (avg_freq / effective_freq)
+    R = clip(R, R_min, R_max)
+
+R_typical / avg_freq / R_min / R_max 的来源：
+- R_typical：由“命中率 p 的分位数”给出（你设 p=0.5 就用 50% 分位）
+- avg_freq：全局频率的典型值（中位数）
+- R_min/R_max：工程兜底
