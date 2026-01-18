@@ -183,6 +183,9 @@ cython_debug/
 
 # Large word vector files
 /data/word_vectors/
+/data/*.db
+/data/*.sqlite
+/data/*.sqlite3
 /models/word_vectors/
 /text2vec-word2vec-tencent-chinese/
 /light_Tencent_AILab_ChineseEmbedding.bin

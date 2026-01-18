@@ -17,3 +17,9 @@ class InMemoryStore:
         self.meta_table: Dict[str, MetaEntry] = {}
         self.instance_table: Dict[str, InstanceNode] = {}
         self.graph = Graph()
+
+    def load(self) -> None:
+        """内存存储无需加载。"""
+
+    def save(self) -> None:
+        """内存存储无需保存。"""

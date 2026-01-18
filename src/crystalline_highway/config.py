@@ -79,3 +79,11 @@ class MemoryConfig:
     retrieval_quota_paragraph: int = 3
     retrieval_quota_memory: int = 1
     retrieval_quota_possible: int = 2
+    # 存储后端：sqlite 或 memory
+    storage_backend: str = "sqlite"
+    # SQLite 存储路径（默认 data/crystalline_highway.db）
+    storage_path: str = field(
+        default_factory=lambda: str(Path(__file__).resolve().parents[2] / "data" / "crystalline_highway.db")
+    )
+    # 写入后是否自动保存
+    storage_auto_save: bool = True

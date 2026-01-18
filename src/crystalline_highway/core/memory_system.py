@@ -27,7 +27,7 @@ from .text_utils import normalize_text
 from ..models.graph import EdgeType
 from ..models.instance import InstanceNode
 from ..models.session import SessionState
-from ..storage.in_memory import InMemoryStore
+from ..storage import create_store
 
 
 class MemorySystem:
@@ -35,7 +35,8 @@ class MemorySystem:
 
     def __init__(self, config: MemoryConfig | None = None) -> None:
         self.config = config or MemoryConfig()
-        self.store = InMemoryStore()
+        self.store = create_store(self.config)
+        self.store.load()
         self.global_frequency = GlobalFrequencyProvider(
             language=self.config.frequency_language,
             sample_size=self.config.frequency_word_sample_size,
@@ -182,6 +183,7 @@ class MemorySystem:
             path_nodes.append(node)
             prev_node = node
             center = node.vector_pos
+        self._save_if_needed()
         return path_nodes
 
     def recite_sequence(self, tokens: Iterable[str]) -> List[InstanceNode]:
@@ -335,7 +337,7 @@ class MemorySystem:
             if ttl <= 0:
                 continue
             current_node = self.store.instance_table[current_id]
-            neighbors = self.store.graph.neighbors(current_id)
+            neighbors = self.store.graph.neighbors(current_id, include_reverse_horizontal=True)
             for neighbor_id in neighbors:
                 neighbor_node = self.store.instance_table[neighbor_id]
                 penalty = min(neighbor_node.hub_penalty, self.config.hub_penalty_cap)
@@ -346,6 +348,10 @@ class MemorySystem:
                 frontier.append((neighbor_id, next_ttl))
         ranked = sorted(session.light_count.items(), key=lambda item: -item[1])
         return self._collect_retrieval_results(ranked, session)
+
+    def _save_if_needed(self) -> None:
+        if self.config.storage_auto_save:
+            self.store.save()
 
     def _collect_retrieval_results(
         self,

@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Tuple
+from typing import Dict
 
 
 class EdgeType(str, Enum):
@@ -50,8 +50,32 @@ class Graph:
     def get_edge(self, src_id: str, dst_id: str) -> EdgeData | None:
         return self.out_edges.get(src_id, {}).get(dst_id)
 
-    def neighbors(self, node_id: str) -> Dict[str, EdgeData]:
-        return self.out_edges.get(node_id, {})
+    def neighbors(
+        self, node_id: str, *, include_reverse_horizontal: bool = False
+    ) -> Dict[str, EdgeData]:
+        """获取可遍历邻居。
+
+        检索态方向性规则：
+        - 横向路可双向通行（include_reverse_horizontal=True 时启用反向）。
+        - 纵向路仅允许按出边方向前进。
+        """
+
+        neighbors = dict(self.out_edges.get(node_id, {}))
+        if not include_reverse_horizontal:
+            return neighbors
+        for src_id, edge in self.in_edges.get(node_id, {}).items():
+            if edge.edge_type == EdgeType.horizontal:
+                neighbors.setdefault(src_id, edge)
+        return neighbors
+
+    def set_edge(self, src_id: str, dst_id: str, edge_type: EdgeType, walk_count: int) -> None:
+        """加载用：直接设置边及其次数。"""
+
+        self._ensure_node(src_id)
+        self._ensure_node(dst_id)
+        edge = EdgeData(edge_type=edge_type, walk_count=max(0, walk_count))
+        self.out_edges[src_id][dst_id] = edge
+        self.in_edges[dst_id][src_id] = edge
 
     def downgrade_edge(self, src_id: str, dst_id: str, decrement: int) -> None:
         """固化时迁移次数：削减旧路计数。"""

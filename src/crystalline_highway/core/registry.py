@@ -13,6 +13,7 @@ from .word_vectors import WordVectorProvider
 from ..models.instance import InstanceNode
 from ..models.meta import MetaEntry
 from ..storage.in_memory import InMemoryStore
+from ..storage.sqlite_store import SQLiteStore
 
 
 class Registry:
@@ -20,14 +21,14 @@ class Registry:
 
     def __init__(
         self,
-        store: InMemoryStore,
+        store: InMemoryStore | SQLiteStore,
         config: MemoryConfig,
         global_frequency: GlobalFrequencyProvider | None = None,
     ) -> None:
         self.store = store
         self.config = config
-        self._meta_counter = itertools.count(1)
-        self._node_counter = itertools.count(1)
+        self._meta_counter = itertools.count(self._next_id_from_store("meta-"))
+        self._node_counter = itertools.count(self._next_id_from_store("node-"))
         self.global_frequency = global_frequency or GlobalFrequencyProvider(
             language=config.frequency_language,
             sample_size=config.frequency_word_sample_size,
@@ -44,6 +45,21 @@ class Registry:
         )
         if self.vector_provider.dim != self.config.vector_dim:
             self.config.vector_dim = self.vector_provider.dim
+
+    def _next_id_from_store(self, prefix: str) -> int:
+        max_id = 0
+        if prefix == "meta-":
+            ids = (meta.meta_id for meta in self.store.meta_table.values())
+        else:
+            ids = (node.node_id for node in self.store.instance_table.values())
+        for item_id in ids:
+            if not item_id.startswith(prefix):
+                continue
+            try:
+                max_id = max(max_id, int(item_id[len(prefix) :]))
+            except ValueError:
+                continue
+        return max_id + 1
 
     def ensure_meta(
         self,
