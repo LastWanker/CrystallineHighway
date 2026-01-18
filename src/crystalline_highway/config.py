@@ -15,8 +15,8 @@ class MemoryConfig:
     vector_dim: int = 200
     # 频率与半径的基本常量，用于将频率映射成容忍度
     radius_base: float = 1.0
-    radius_floor: float = 0.05
-    radius_ceiling: float = 5.0
+    radius_floor: float = 0.0
+    radius_ceiling: float = 100.0
     # 频率映射命中概率（典型词命中率）
     frequency_hit_probability: float = 0.5
     # 私人频率影响强度与上限
@@ -49,7 +49,7 @@ class MemoryConfig:
     # 固化阈值：一段路径被走过的次数达到该值触发固化
     crystallize_threshold: int = 2
     # 检索时的 TTL 基础步数
-    retrieval_ttl: int = 4
+    retrieval_ttl: int = 10
     # hub 惩罚的最大上限，避免绝对封死
     hub_penalty_cap: float = 2.0
     # 固化元初始容忍度放大系数

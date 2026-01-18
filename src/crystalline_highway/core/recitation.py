@@ -36,6 +36,8 @@ class RecitationPlanner:
     def build_plan(self, text: str) -> List[RecitationUnit]:
         """先拆分、再倒序输出用于背诵的单元序列。"""
 
+        # 0) 最小词素：用于“从零碎开始背诵”的底层输入。
+        morphemes = self.segmenter.segment_morphemes(text)
         # 1) 段落：仅按换行拆分，保留原标点。
         paragraphs = self.segmenter.split_paragraphs(text)
         # 2) 长句：只按句号/问号/感叹号等句末标点拆分。
@@ -48,6 +50,14 @@ class RecitationPlanner:
         )
 
         plan: List[RecitationUnit] = []
+        for morpheme in morphemes:
+            plan.append(
+                RecitationUnit(
+                    display_text=morpheme,
+                    normalized_text=normalize_text(morpheme),
+                    label="morpheme",
+                )
+            )
         # 4) 短语：由分词器输出的词条序列（比最小词素更大）。
         for clause in short_sentences:
             for phrase in self.segmenter.segment_words(clause.display_text):

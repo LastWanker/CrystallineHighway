@@ -124,8 +124,33 @@ def render_plot(
 ) -> None:
     try:
         import matplotlib.pyplot as plt
+        from matplotlib import font_manager, rcParams
     except ImportError as exc:  # pragma: no cover - 可选依赖
         raise SystemExit("缺少 matplotlib，请先安装后再运行可视化脚本。") from exc
+
+    def configure_chinese_font() -> None:
+        candidates = [
+            "Noto Sans CJK SC",
+            "Noto Sans CJK",
+            "Source Han Sans SC",
+            "SimHei",
+            "Microsoft YaHei",
+            "WenQuanYi Zen Hei",
+            "PingFang SC",
+            "Arial Unicode MS",
+        ]
+        for name in candidates:
+            try:
+                font_path = font_manager.findfont(name, fallback_to_default=False)
+            except ValueError:
+                continue
+            if Path(font_path).exists():
+                rcParams["font.family"] = name
+                rcParams["font.sans-serif"] = [name]
+                rcParams["axes.unicode_minus"] = False
+                return
+
+    configure_chinese_font()
 
     max_nodes = max((len(instance_nodes), 1))
     max_layer = max(

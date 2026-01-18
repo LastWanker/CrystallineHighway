@@ -224,11 +224,12 @@ class MemorySystem:
             for unit in plan:
                 self._register_unit(unit)
                 # 每个层级单元都必须收敛：也就是它们作为“寻找目标”已被注册到词典中。
-                tokens = self.segmenter.segment_words(unit.normalized_text)
+                tokens = self.segmenter.segment_morphemes(unit.display_text)
                 self.recite_sequence(tokens)
             if self._check_converged(plan):
                 self._tag_converged(plan)
                 return
+        self._force_register_unresolved(plan)
         self._tag_converged(plan)
 
     def _check_converged(self, plan) -> bool:
@@ -250,10 +251,15 @@ class MemorySystem:
     def _register_unit(self, unit) -> None:
         if not unit.normalized_text:
             return
-        meta = self.registry.ensure_meta(
-            unit.display_text,
-            normalized_text=unit.normalized_text,
-        )
+        if unit.label == "morpheme":
+            meta = self.registry.ensure_meta(
+                unit.display_text,
+                normalized_text=unit.normalized_text,
+            )
+        else:
+            meta = self.store.meta_table.get(unit.normalized_text)
+            if meta is None:
+                return
         if not meta.instances:
             radius = self._dynamic_radius(unit.display_text)
             self._create_instance_near(
@@ -261,6 +267,26 @@ class MemorySystem:
                 vector.zero_vector(self.config.vector_dim),
                 radius,
             )
+
+    def _force_register_unresolved(self, plan) -> None:
+        """背诵轮次耗尽时才补注册，避免大块文本一上来就落词典。"""
+
+        for unit in plan:
+            if not unit.normalized_text:
+                continue
+            if unit.normalized_text in self.store.meta_table:
+                continue
+            meta = self.registry.ensure_meta(
+                unit.display_text,
+                normalized_text=unit.normalized_text,
+            )
+            if not meta.instances:
+                radius = self._dynamic_radius(unit.display_text)
+                self._create_instance_near(
+                    unit.display_text,
+                    vector.zero_vector(self.config.vector_dim),
+                    radius,
+                )
 
     def _private_typical_frequency(self) -> float:
         return private_typical(
@@ -325,13 +351,11 @@ class MemorySystem:
         """检索/回忆流程，返回候选节点及其来源。"""
 
         session = SessionState(ttl_budget=self.config.retrieval_ttl)
-        seed_nodes: List[InstanceNode] = []
-        center = vector.zero_vector(self.config.vector_dim)
         tokens = [token for token in query_tokens if normalize_text(token)]
         tokens = self._prefer_longer_tokens(list(tokens))
-        for token in tokens:
-            node = self._ensure_instance(token, center)
-            seed_nodes.append(node)
+        seed_nodes = self._resolve_query_seed_nodes(tokens)
+        if not seed_nodes:
+            return {}
         # 多源扩散
         frontier = [(node.node_id, session.ttl_budget) for node in seed_nodes]
         for node in seed_nodes:
@@ -352,6 +376,21 @@ class MemorySystem:
                 frontier.append((neighbor_id, next_ttl))
         ranked = sorted(session.light_count.items(), key=lambda item: -item[1])
         return self._collect_retrieval_results(ranked, session)
+
+    def _resolve_query_seed_nodes(self, tokens: List[str]) -> List[InstanceNode]:
+        """查询态仅用已有实例，不在词典中落新点。"""
+
+        seed_nodes: List[InstanceNode] = []
+        for token in tokens:
+            meta = self.store.meta_table.get(normalize_text(token))
+            if meta is None:
+                continue
+            candidates = [self.store.instance_table[node_id] for node_id in meta.instances]
+            if not candidates:
+                continue
+            candidates.sort(key=lambda node: -node.stats.use_count)
+            seed_nodes.append(candidates[0])
+        return seed_nodes
 
     def _save_if_needed(self) -> None:
         if self.config.storage_auto_save:
