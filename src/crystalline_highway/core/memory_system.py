@@ -153,6 +153,10 @@ class MemorySystem:
 
         radius = self._dynamic_radius(meta_text)
         candidates = self._find_candidates(meta_text, center, radius)
+        actual_distance = min((dist for _node, dist in candidates), default=None)
+        success = "成功" if candidates else "失败"
+        distance_text = f"{actual_distance:.4f}" if actual_distance is not None else "无"
+        print(f"寻找{meta_text}，容忍半径{radius:.4f}，实际距离{distance_text}，{success}")
         chosen = self._select_best(candidates)
         if chosen is None:
             chosen = self._create_instance_near(meta_text, center, radius)
