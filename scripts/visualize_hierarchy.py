@@ -8,7 +8,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
-from crystalline_highway.config import MemoryConfig
+from src.crystalline_highway.config import MemoryConfig
 
 
 @dataclass(frozen=True)

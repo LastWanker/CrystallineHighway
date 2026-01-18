@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 
-from crystalline_highway.config import MemoryConfig
-from crystalline_highway.core.registry import Registry
-from crystalline_highway.frequency.calibration import (
+from src.crystalline_highway.config import MemoryConfig
+from src.crystalline_highway.core.registry import Registry
+from src.crystalline_highway.frequency.calibration import (
     FrequencyCalibrator,
     fallback_frequency_calibration,
     save_frequency_calibration,
 )
-from crystalline_highway.frequency.global_frequency import GlobalFrequencyProvider
-from crystalline_highway.storage.in_memory import InMemoryStore
+from src.crystalline_highway.frequency.global_frequency import GlobalFrequencyProvider
+from src.crystalline_highway.storage.in_memory import InMemoryStore
 
 
 def main() -> None:

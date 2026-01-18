@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from crystalline_highway.core.memory_system import MemorySystem
+from src.crystalline_highway.core.memory_system import MemorySystem
 
 
 def main() -> None:

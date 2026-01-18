@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from crystalline_highway.core.memory_system import MemorySystem
+from src.crystalline_highway.core.memory_system import MemorySystem
 
 # TODO: 把你要背诵的文本粘贴到这里。
 TEXT_TO_RECITE = """
