@@ -27,5 +27,5 @@ class InstanceNode:
     stats: InstanceStats = field(default_factory=InstanceStats)
     # hub 惩罚用于检索态 TTL 折寿
     hub_penalty: float = 0.0
-    # 额外信息：例如固化元指向的原始文本片段等
+    # 额外信息：例如固化元计数、来源摘要等
     payload: Dict[str, str] = field(default_factory=dict)

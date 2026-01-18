@@ -55,7 +55,7 @@ class RecitationPlanner:
                     RecitationUnit(
                         display_text=phrase,
                         normalized_text=normalize_text(phrase),
-                        label="phrase",
+                        label="短语",
                     )
                 )
         for sentence in short_sentences:

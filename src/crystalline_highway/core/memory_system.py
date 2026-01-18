@@ -6,6 +6,19 @@ import math
 from typing import Dict, Iterable, List, Tuple
 
 from ..config import MemoryConfig
+from ..frequency.calibration import (
+    FrequencyCalibrator,
+    FrequencyCalibration,
+    fallback_frequency_calibration,
+    load_frequency_calibration,
+    save_frequency_calibration,
+)
+from ..frequency.global_frequency import GlobalFrequencyProvider
+from ..frequency.tolerance import (
+    effective_frequency,
+    private_typical,
+    radius_from_frequency,
+)
 from . import vector
 from .recitation import RecitationPlanner
 from .registry import Registry
@@ -23,11 +36,31 @@ class MemorySystem:
     def __init__(self, config: MemoryConfig | None = None) -> None:
         self.config = config or MemoryConfig()
         self.store = InMemoryStore()
-        self.registry = Registry(self.store, self.config)
+        self.global_frequency = GlobalFrequencyProvider(
+            language=self.config.frequency_language,
+            sample_size=self.config.frequency_word_sample_size,
+            fallback_frequency=self.config.frequency_fallback_avg_freq,
+        )
+        self.registry = Registry(self.store, self.config, self.global_frequency)
+        self.frequency_calibration = self._load_frequency_calibration()
         # 分词器与背诵计划器是“文本进入系统的入口”，对应指导文件里的
         # “先拆分、再倒序背诵、直到收敛”的流程。
         self.segmenter = ChineseSegmenter()
         self.recitation_planner = RecitationPlanner(self.segmenter)
+
+    def _load_frequency_calibration(self) -> FrequencyCalibration:
+        calibration = load_frequency_calibration(self.config.frequency_calibration_path)
+        if calibration is not None:
+            return calibration
+        calibration = fallback_frequency_calibration(
+            self.config,
+            avg_freq=self.global_frequency.typical_frequency(),
+        )
+        if self.config.frequency_auto_calibrate:
+            calibrator = FrequencyCalibrator(self.config, self.global_frequency)
+            calibration = calibrator.build(self.registry.vector_provider)
+            save_frequency_calibration(self.config.frequency_calibration_path, calibration)
+        return calibration
 
     def _dynamic_radius(self, meta_text: str) -> float:
         """根据频率计算动态容忍度。
@@ -41,8 +74,24 @@ class MemorySystem:
         meta = self.store.meta_table.get(normalize_text(meta_text))
         if meta is None:
             return self.config.radius_ceiling
-        freq = max(meta.private_freq, 0.1)
-        radius = self.config.radius_base / freq
+        private_scale = self._private_typical_frequency()
+        effective_freq = effective_frequency(
+            meta.global_freq,
+            meta.private_freq,
+            private_scale,
+            self.config.frequency_private_beta,
+            self.config.frequency_private_cap,
+            self.config.frequency_eps,
+        )
+        radius = radius_from_frequency(
+            self.frequency_calibration,
+            effective_freq,
+            self.config.frequency_hit_probability,
+            self.frequency_calibration.avg_freq,
+            self.config.radius_floor,
+            self.config.radius_ceiling,
+            self.config.frequency_eps,
+        )
         # 固化元的容忍度更大，但用对数缓和扩张速度
         if meta.level > 0:
             count = max(meta.crystallized_count, 1)
@@ -84,9 +133,17 @@ class MemorySystem:
         """
 
         meta = self.registry.ensure_meta(meta_text)
-        # 高频元的范畴偏移更弱，简单按频率做衰减
-        freq = max(meta.private_freq, 1.0)
-        bias = vector.scale(meta.category_vector, 1.0 / freq)
+        # 高频元的范畴偏移更弱，按“有效频率”做衰减
+        private_scale = self._private_typical_frequency()
+        effective_freq = effective_frequency(
+            meta.global_freq,
+            meta.private_freq,
+            private_scale,
+            self.config.frequency_private_beta,
+            self.config.frequency_private_cap,
+            self.config.frequency_eps,
+        )
+        bias = vector.scale(meta.category_vector, 1.0 / max(effective_freq, 1.0))
         jitter_scale = min(radius, self.config.jitter_scale)
         return self.registry.create_instance(meta, center, bias, jitter_scale)
 
@@ -159,6 +216,7 @@ class MemorySystem:
         while rounds < self.config.recitation_max_rounds:
             rounds += 1
             for unit in plan:
+                self._register_unit(unit)
                 # 每个层级单元都必须收敛：也就是它们作为“寻找目标”已被注册到词典中。
                 tokens = self.segmenter.segment_words(unit.normalized_text)
                 self.recite_sequence(tokens)
@@ -182,6 +240,27 @@ class MemorySystem:
             if unit.display_text and len(unit.display_text) > len(meta.text):
                 meta.text = unit.display_text
             meta.labels.add(unit.label)
+
+    def _register_unit(self, unit) -> None:
+        if not unit.normalized_text:
+            return
+        meta = self.registry.ensure_meta(
+            unit.display_text,
+            normalized_text=unit.normalized_text,
+        )
+        if not meta.instances:
+            radius = self._dynamic_radius(unit.display_text)
+            self._create_instance_near(
+                unit.display_text,
+                vector.zero_vector(self.config.vector_dim),
+                radius,
+            )
+
+    def _private_typical_frequency(self) -> float:
+        return private_typical(
+            (meta.private_freq for meta in self.store.meta_table.values()),
+            self.config.frequency_private_typical_default,
+        )
 
     def _maybe_crystallize(self, left: InstanceNode, right: InstanceNode) -> None:
         """检测两元路径是否达到固化阈值。"""

@@ -6,6 +6,7 @@ import itertools
 from typing import List
 
 from ..config import MemoryConfig
+from ..frequency.global_frequency import GlobalFrequencyProvider
 from . import vector
 from .text_utils import normalize_text
 from .word_vectors import WordVectorProvider
@@ -17,11 +18,21 @@ from ..storage.in_memory import InMemoryStore
 class Registry:
     """统一管理元与实例。"""
 
-    def __init__(self, store: InMemoryStore, config: MemoryConfig) -> None:
+    def __init__(
+        self,
+        store: InMemoryStore,
+        config: MemoryConfig,
+        global_frequency: GlobalFrequencyProvider | None = None,
+    ) -> None:
         self.store = store
         self.config = config
         self._meta_counter = itertools.count(1)
         self._node_counter = itertools.count(1)
+        self.global_frequency = global_frequency or GlobalFrequencyProvider(
+            language=config.frequency_language,
+            sample_size=config.frequency_word_sample_size,
+            fallback_frequency=config.frequency_fallback_avg_freq,
+        )
         # 词向量用于“范畴场/星图”，这里对接外部词向量库（腾讯中文词向量）。
         # 这符合“寻找驱动建构”里“先有粗糙范畴力场”的设定。
         self.vector_provider = WordVectorProvider(
@@ -37,7 +48,7 @@ class Registry:
     def ensure_meta(
         self,
         text: str,
-        global_freq: float = 1.0,
+        global_freq: float | None = None,
         normalized_text: str | None = None,
     ) -> MetaEntry:
         """获取或创建元条目。
@@ -58,11 +69,16 @@ class Registry:
                 meta.text = text
             return meta
         meta_id = f"meta-{next(self._meta_counter)}"
+        resolved_global_freq = (
+            self.global_frequency.word_frequency(normalized_key)
+            if global_freq is None
+            else global_freq
+        )
         entry = MetaEntry(
             meta_id=meta_id,
             text=text,
             normalized_text=normalized_key,
-            global_freq=global_freq,
+            global_freq=resolved_global_freq,
             private_freq=1.0,
             category_vector=self.vector_provider.get_vector(text),
         )
