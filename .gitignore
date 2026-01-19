@@ -189,3 +189,4 @@ cython_debug/
 /models/word_vectors/
 /text2vec-word2vec-tencent-chinese/
 /light_Tencent_AILab_ChineseEmbedding.bin
+scripts/data/hierarchy_view.png
