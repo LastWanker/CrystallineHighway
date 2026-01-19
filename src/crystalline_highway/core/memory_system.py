@@ -215,18 +215,16 @@ class MemorySystem:
 
         plan = self.recitation_planner.build_plan(text)
         self._register_plan(plan)
-        self._pre_register_morphemes(plan)
+        self._pre_register_morphemes(text)
         self._recite_until_converged(plan)
 
-    def _pre_register_morphemes(self, plan) -> None:
+    def _pre_register_morphemes(self, text: str) -> None:
         """用最小词素提前注册元条目与实例落点。"""
 
-        for unit in plan:
-            if unit.label != "morpheme":
-                continue
-            if normalize_text(unit.display_text):
+        for token in self.segmenter.segment_morphemes(text):
+            if normalize_text(token):
                 # 这里直接触发一次寻找，保证实例册里确实有落点。
-                self._ensure_instance(unit.display_text, vector.zero_vector(self.config.vector_dim))
+                self._ensure_instance(token, vector.zero_vector(self.config.vector_dim))
 
     def _recite_until_converged(self, plan) -> None:
         """循环背诵直到收敛：对应单元被注册或固化。"""
@@ -238,8 +236,10 @@ class MemorySystem:
             for unit in plan:
                 if unit.label == "morpheme":
                     continue
-                if unit.tokens:
-                    self.recite_sequence(unit.tokens)
+                tokens = self._tokens_for_unit(unit)
+                if not tokens:
+                    continue
+                self._ensure_unit_instance(unit, tokens)
             if self._check_converged(plan):
                 self._tag_converged(plan)
                 return
